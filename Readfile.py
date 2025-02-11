@@ -36,4 +36,4 @@ for folder in os.listdir(root_dir):
         if os.path.exists(rho_file):
             shutil.copy(rho_file, os.path.join(tomo_dir, f"tomo_{folder_suffix}.npy"))
 
-print("File renaming, sorting, and copying completed within the Data folder!")
+print("Completed")
