@@ -1,39 +1,69 @@
 import os
-import shutil
+import numpy as np
 
-# Define the base directory where the experiment folders are located
-root_dir = "/Users/yujie4/Documents/Code/PycharmProjects/Bipartite-nonclasscality/Data"
+# Define the root directory
+ROOT_DIR = "Data"
 
-# Define subdirectories for different file types within the same Data folder
-counts_dir = os.path.join(root_dir, "Counts")
-prob_dir = os.path.join(root_dir, "Probabilities")
-tomo_dir = os.path.join(root_dir, "Tomography")
 
-# Create the subdirectories if they do not exist
-os.makedirs(counts_dir, exist_ok=True)
-os.makedirs(prob_dir, exist_ok=True)
-os.makedirs(tomo_dir, exist_ok=True)
+def load_file(file_type, file_name):
+    """
+    Reads a specific .npy file from Counts or Probabilities.
 
-# Loop through each folder in the root directory
-for folder in os.listdir(root_dir):
-    folder_path = os.path.join(root_dir, folder)
+    :param file_type: "Counts" or "Probabilities"
+    :param file_name: Name of the file (e.g., "counts_048.npy")
+    :return: NumPy array if the file is found, otherwise None.
+    """
+    if file_type not in ["Counts", "Probabilities"]:
+        print(f"❌ Invalid file type: {file_type}. Choose 'Counts' or 'Probabilities'.")
+        return None
 
-    # Ensure it's a directory
-    if os.path.isdir(folder_path):
-        # Extract the last few digits from the folder name
-        folder_suffix = folder.split("_")[-1]  # Get the last part after the last underscore
+    folder_path = os.path.join(ROOT_DIR, file_type)
+    file_path = os.path.join(folder_path, file_name)
 
-        # Define file paths in the source directory
-        counts_file = os.path.join(folder_path, "counts.npy")
-        prob_file = os.path.join(folder_path, "probabilities.npy")
-        rho_file = os.path.join(folder_path, "rho_36_states.npy")
+    if os.path.exists(file_path):
+        data = np.load(file_path)
+        print(f"✅ Loaded {file_name} from {file_type}: {data.shape}")
+        return data
+    else:
+        print(f"❌ File not found: {file_path}")
+        return None
 
-        # Check if each file exists before renaming and copying
-        if os.path.exists(counts_file):
-            shutil.copy(counts_file, os.path.join(counts_dir, f"counts_{folder_suffix}.npy"))
-        if os.path.exists(prob_file):
-            shutil.copy(prob_file, os.path.join(prob_dir, f"prob_{folder_suffix}.npy"))
-        if os.path.exists(rho_file):
-            shutil.copy(rho_file, os.path.join(tomo_dir, f"tomo_{folder_suffix}.npy"))
 
-print("Sorting Completed")
+def swap1(b):
+    """Swap specific row pairs in the array."""
+    row_swaps = [(0, 3), (1, 2), (4, 7), (5, 6), (8, 11), (9, 10)]
+    for row1, row2 in row_swaps:
+        b[[row1, row2]] = b[[row2, row1]]
+    return b
+
+
+def swap2(b):
+    """Swap specific column pairs in the array."""
+    column_swaps = [(0, 18), (1, 15), (2, 16), (3, 11), (4, 10),
+                    (5, 14), (6, 12), (7, 17), (8, 19), (9, 13)]
+    for col1, col2 in column_swaps:
+        b[:, [col1, col2]] = b[:, [col2, col1]]
+    return b
+
+
+def process_data(file_type, file_name):
+    """
+    Loads the file, applies swap operations, and computes the final processed array P.
+
+    :param file_type: "Counts" or "Probabilities"
+    :param file_name: Name of the .npy file to process
+    :return: Processed NumPy array P
+    """
+    data = load_file(file_type, file_name)
+    if data is None:
+        return None  # Return None if file not found
+
+    # Applying transformations
+    t1 = data[0]
+    t2 = swap2(swap1(data[1]))
+    t3 = swap1(data[2])
+    t4 = swap2(data[3])
+
+    # Compute final result
+    P = (t1 + t2 + t3 + t4) / 4
+    return P
