@@ -1,6 +1,6 @@
 import numpy as np
 from secondaryP import SecP
-from Fitstatech import FitQ
+from Fitstate import FitQ
 from FitGPT_SS2 import FitGPT
 import Bases
 from Tofrequency import process_data
@@ -39,9 +39,6 @@ for r_val, fname in zip(r_values, file_names):
     file_path = os.path.join(ROOT_DIR, fname)
     data = np.load(file_path)
 
-    # Now you have the numeric handle r_val and the corresponding data
-    P, Pu = process_data(data)
-
     # Example tomography or fit calls:
     # (Use your own initial guess for rho, or define it outside the loop)
     N = Bases.icosahedron_povm() * 6
@@ -51,6 +48,9 @@ for r_val, fname in zip(r_values, file_names):
     opt_rhol=[]
     fidelity_ol=[]
     for i in range(100):
+        noisy_data = np.random.poisson(lam=data)
+        # Process the noisy counts into frequencies (P) and uncertainties (Pu)
+        P, Pu = process_data(noisy_data)
         rho_init = r_val*np.array([
             [1/2, 0, 0, 1/2],
             [0, 0, 0, 0],
