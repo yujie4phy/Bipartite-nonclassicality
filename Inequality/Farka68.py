@@ -5,9 +5,9 @@ from scipy.linalg import null_space
 from itertools import product
 from pypoman import compute_polytope_vertices
 from gurobipy import Model, GRB, LinExpr
-
+import sympy as sp
 from decimal import Decimal, getcontext
-
+import pickle
 # Set precision for Decimal calculations
 getcontext().prec = 10
 import gurobipy as gp
@@ -68,36 +68,18 @@ def checklp(vectors):
     rank = np.linalg.matrix_rank(matrix)
     return rank
 
-def compute_M_trace(A, B):
+def computep(A, B):
     n = len(A)  # Number of A matrices
     m = len(B)  # Number of B matrices
     M = np.zeros((n, m))
 
     for i in range(n):
         for j in range(m):
-            product = np.dot(A[i]*len(A), B[j].T*len(B))/8  # Matrix multiplication
-            M[i, j] = np.abs(np.trace(product)) # Compute trace
+            product = np.dot(A[i]*6, B[j].T*10)/2  # Matrix multiplication
+            M[i, j] = np.abs(np.trace(product))  # Compute trace
 
     return M
 
-
-
-def generate_measurements(k, dA):
-    XX = np.array([[0, 1], [1, 0]])  # Pauli X matrix
-    ZZ = np.array([[1, 0], [0, -1]])  # Pauli Z matrix
-    A = np.zeros((k, dA, dA), dtype=complex)
-    for i in range(k):
-        theta = (i) * 2*np.pi / k
-        A[i, :, :] = 1/k * (np.eye(dA) + np.sin(theta) * XX + np.cos(theta) * ZZ)
-    return A
-def generate_states(k, dA):
-    XX = np.array([[0, 1], [1, 0]])  # Pauli X matrix
-    ZZ = np.array([[1, 0], [0, -1]])  # Pauli Z matrix
-    A = np.zeros((k, dA, dA), dtype=complex)
-    for i in range(k):
-        theta = (i) * 2*np.pi / k+np.pi/k
-        A[i, :, :] = 1/k * (np.eye(dA) + np.sin(theta) * XX + np.cos(theta) * ZZ)
-    return A
 
 def tensorvertices(A, B):
     # Number of vertices in sets A and B
@@ -112,39 +94,6 @@ def tensorvertices(A, B):
             C[index] = np.kron(A[i], B[j])
             index += 1
     return C
-
-def swap1(b):
-    row_swaps = [(0, 3), (1, 2), (4, 7), (5, 6), (8, 11), (9, 10)]
-    for row1, row2 in row_swaps:
-        b[[row1, row2]] = b[[row2, row1]]
-    return b
-def swap2(b):
-    column_swaps = [(0, 18), (1, 15), (2, 16), (3, 11), (4, 10), (5, 14), (6, 12), (7, 17), (8, 19), (9, 13)]
-    for col1, col2 in column_swaps:
-        b[:, [col1, col2]] = b[:, [col2, col1]]
-    return b
-
-
-bb=Bases.dodecahedron_povm()
-B=Dvertices(bb).T
-
-aa=Bases.icosahedron_povm()
-A= Dvertices(aa).T
-# Compute M
-M=tensorvertices(A, B)
-data = np.load('probabilities.npy')
-t1=data[0]
-t2=swap2(swap1(data[1]))
-t3=swap1(data[2])
-t4=swap2(data[3])
-b=(t1+t2+t3+t4)/4
-b=b.flatten()
-print(data)
-
-b = compute_M_trace(aa,bb).flatten()
-#b=data[1].flatten()
-#M,b = construct_Mx_and_tilde_b(B, D, b)
-
 
 def solve_dual_problem(M, b):
     m, n = M.shape
@@ -161,7 +110,7 @@ def solve_dual_problem(M, b):
     # Add the constraints: 1 >= y * M >= 0
     for j in range(n):
         model.addConstr(sum(M[i, j] * y[i] for i in range(m)) >= 0, name=f"lower_constr_{j}")
-        model.addConstr(sum(M[i, j] * y[i] for i in range(m)) <= 1, name=f"upper_constr_{j}")
+        model.addConstr(sum(M[i, j] * y[i] for i in range(m)) <= 0.1, name=f"upper_constr_{j}")
 
     # Solve the model
     model.optimize()
@@ -175,108 +124,73 @@ def solve_dual_problem(M, b):
         print(f"Solver ended with status: {model.status}")
         return None
 
-y_solution = solve_dual_problem(M, b)
-ymat=y_solution.reshape(len(aa),len(bb))/y_solution[0]
+def expression(y,rhs=0, return_latex=False):
+    # Step 1: Reshape ymat into (6, 8)
+    data_array = np.array(y).reshape(6, 8)
 
-import numpy as np
-import sympy as sp
+    # Step 2: Define index maps
+    M_idx_map = [(x, a) for x in range(3) for a in range(2)]
+    N_idx_map = [(y, 0) for y in range(4)] + [(y, 1) for y in reversed(range(4))]
 
+    # Step 3: Fill the tensor
+    tensor = np.zeros((3, 4, 2, 2))
+    for i, (x, a) in enumerate(M_idx_map):
+        for j, (y, b) in enumerate(N_idx_map):
+            tensor[x, y, a, b] = data_array[i, j]
 
-def ineq_expr240_custom(data, rhs=0, ret_latex=False):
-    """
-    Given a list (or 1D array) 'data' of 240 numbers, rearrange these numbers
-    into a 4D tensor T of shape (6,10,2,2) using fixed index maps for the rows and columns,
-    and build a symbolic inequality expression:
-
-         ∑ₓ₌₀⁵ ∑ᵧ₌₀⁹ ∑ₐ₌₀¹ ∑ᵦ₌₀¹ T[x,y,a,b]*p(a,b|x,y) ≥ rhs.
-
-    The fixed index maps are defined as follows:
-
-       M_map (for rows):  -- 12 items (to be interpreted as a 6×2 grouping)
-           [(0,0), (0,1),
-            (1,1), (1,0),
-            (0,2), (0,3),
-            (1,3), (1,2),
-            (0,4), (0,5),
-            (1,5), (1,4)]
-
-       N_map (for columns):  -- 20 items (to be interpreted as a 10×2 grouping)
-           [(0,0), (0,1), (0,2), (0,3), (0,4),
-            (0,5), (0,6), (0,7), (0,8), (0,9),
-            (1,4), (1,3), (1,6), (1,9), (1,5),
-            (1,1), (1,2), (1,7), (1,0), (1,8)]
-
-    These maps imply that the 240 numbers are first reshaped into a 12×20 matrix.
-    Then, for each row index i (0 ≤ i < 12) and column index j (0 ≤ j < 20):
-         Let (x, a) = M_map[i]   and   (y, b) = N_map[j].
-         Then assign T[x, y, a, b] = (data[i,j]).
-    The resulting tensor T will have shape (6, 10, 2, 2), because:
-         - 12 = 6 * 2  and  20 = 10 * 2.
-
-    Finally, symbolic variables p(a,b|x,y) are generated (with x=0,...,5, y=0,...,9, a,b ∈ {0,1}),
-    and the inequality expression is:
-         sum_{x=0}^{5} sum_{y=0}^{9} sum_{a=0}^1 sum_{b=0}^1 T[x,y,a,b] * p(a,b|x,y) >= rhs.
-
-    Parameters:
-       data: list or 1D array of 240 numbers.
-       rhs: right-hand side of the inequality (default 0).
-       ret_latex: if True, return the LaTeX representation; otherwise return as string.
-
-    Returns:
-       The symbolic inequality expression as a string (or LaTeX if ret_latex is True).
-    """
-    # Fixed index maps:
-    M_map = [(0, 0), (0, 1),
-             (1, 1), (1, 0),
-             (0, 2), (0, 3),
-             (1, 3), (1, 2),
-             (0, 4), (0, 5),
-             (1, 5), (1, 4)]
-    N_map = [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4),
-             (0, 5), (0, 6), (0, 7), (0, 8), (0, 9),
-             (1, 4), (1, 3), (1, 6), (1, 9), (1, 5),
-             (1, 1), (1, 2), (1, 7), (1, 0), (1, 8)]
-
-    # Step 1: Reshape data into a (12,20) matrix.
-    arr = np.array(data)
-    if arr.size != 240:
-        raise ValueError("Input data must have 240 elements.")
-    M = arr.reshape(12, 20)
-
-    # Step 2: Build tensor T of shape (6,10,2,2).
-    # Initialize T with zeros.
-    T = np.zeros((6, 10, 2, 2))
-    for i in range(12):
-        (a, x) = M_map[i]  # each element of M_map is a tuple (x, a)
-        for j in range(20):
-            (b, y) = N_map[j]  # each element of N_map is a tuple (y, b)
-            T[x, y, a, b] = M[i, j]
-
-    # Step 3: Create symbolic variables p(a,b|x,y).
+    # Step 4: Create symbolic variables p(ab|xy)
     p = {}
-    for x in range(6):
-        for y in range(10):
+    for x in range(3):
+        for y in range(4):
             for a in range(2):
                 for b in range(2):
                     p[(a, b, x, y)] = sp.Symbol(f'p({a}{b}|{x}{y})', real=True)
 
-    # Step 4: Build the symbolic expression.
+    # Step 5: Build symbolic expression
     expr = 0
-    for x in range(6):
-        for y in range(10):
+    for x in range(3):
+        for y in range(4):
             for a in range(2):
                 for b in range(2):
-                    expr += T[x, y, a, b] * p[(a, b, x, y)]
+                    expr += round(tensor[x, y, a, b] / 1.2) * p[(a, b, x, y)]
 
-    # Construct the inequality: expr >= rhs.
-    inequality = sp.Ge(expr, rhs)
+    rhs=0
+    inequality = sp.Ge(expr, rhs)  # expr >= rhs
 
-    return sp.latex(inequality) if ret_latex else str(inequality)
+    # Step 7: Return string or LaTeX form
+    return sp.latex(inequality) if return_latex else str(inequality)
+def save_conv_format(M: np.ndarray, filename: str = "vertice68.poi"):
+    if M.shape != (48, 48):
+        raise ValueError("Input array must be 48 by 48.")
+
+    # Round each entry to the nearest integer
+    M_rounded = np.rint(M).astype(int)
+
+    with open(filename, 'w') as f:
+        f.write("DIM=48\n\n")
+        f.write("CONV_SECTION\n")
+
+        for idx, row in enumerate(M_rounded, start=1):
+            row_str = ' '.join(str(x) for x in row)
+            f.write(f"({idx:3})  {row_str}\n")
+
+        f.write("END\n")
+# save_conv_format(M.T, "vertice68.poi")
+
+bb=Bases.cube_povm()
+B=Dvertices(bb).T
+
+aa=Bases.octahedron_povm()
+A= Dvertices(aa).T
+# Compute M
+M=tensorvertices(A, B)
+b = computep(aa,bb).flatten()
+
+y_solution = solve_dual_problem(M, b)
+#ymat=y_solution.reshape(len(aa),len(bb))
+expr=expression(y_solution)
+# Display the symbolic expression
+sp.pprint(expr, use_unicode=True)
 
 
-# --- Example usage ---
-if __name__ == "__main__":
-    # For demonstration, we'll create dummy data.
-    # Replace this with your actual 240 data values.
-    expr_str = ineq_expr240_custom(y_solution/y_solution[0], rhs=0, ret_latex=False)
-    print(expr_str)
+np.save("y_ineq68.npy", y_solution)
