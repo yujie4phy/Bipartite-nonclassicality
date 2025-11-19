@@ -1,202 +1,247 @@
 import Bases
-import cvxpy as cp
 import numpy as np
-from scipy.linalg import null_space
 from itertools import product
+from scipy.linalg import null_space
 from pypoman import compute_polytope_vertices
-from gurobipy import Model, GRB, LinExpr
+from gurobipy import Model, GRB
 import sympy as sp
-from decimal import Decimal, getcontext
-import pickle
-# Set precision for Decimal calculations
-getcontext().prec = 10
-import gurobipy as gp
+
+
+# ---------------- Gell-Mann basis + vertices ----------------
+
 def GellmannBasisElement(i, j, d):
-    if i > j:  # symmetric elements
+    """Single (generalized) Gell-Mann matrix of size d×d."""
+    if i > j:  # symmetric
         L = np.zeros((d, d), dtype=np.complex128)
-        L[i - 1][j - 1] = 1
-        L[j - 1][i - 1] = 1
-    elif i < j:  # antisymmetric elements
+        L[i - 1, j - 1] = 1
+        L[j - 1, i - 1] = 1
+    elif i < j:  # antisymmetric
         L = np.zeros((d, d), dtype=np.complex128)
-        L[i - 1][j - 1] = -1.0j
-        L[j - 1][i - 1] = 1.0j
-    elif i == j and i < d:  # diagonal elements
-        L = np.sqrt(2 / (i * (i + 1))) * np.diag(
-            [1 if n <= i else (-i if n == (i + 1) else 0) for n in range(1, d + 1)]
-        )
+        L[i - 1, j - 1] = -1.0j
+        L[j - 1, i - 1] = 1.0j
+    elif i == j and i < d:  # diagonal
+        diag = [
+            1 if n <= i else (-i if n == (i + 1) else 0)
+            for n in range(1, d + 1)
+        ]
+        L = np.sqrt(2 / (i * (i + 1))) * np.diag(diag)
     else:  # identity
         L = np.eye(d)
+
+    # Normalise w.r.t. Hilbert–Schmidt inner product
     return np.array(L / np.sqrt((L @ L).trace()))
 
 
-def GelmannBasis(d):
+def GellmannBasis(d):
+    """Full d^2 Gell-Mann basis."""
     return [
-        GellmannBasisElement(i, j, d) for i, j in product(range(1, d + 1), repeat=2)
+        GellmannBasisElement(i, j, d)
+        for i, j in product(range(1, d + 1), repeat=2)
     ]
+
+
 def Dvertices(effects):
+    """
+    Given a POVM {E_k}, compute the vertices of the associated
+    classical polytope in Gell-Mann coordinates.
+    """
     d = effects[0].shape[0]
-    basis = GelmannBasis(d)
+    basis = GellmannBasis(d)
+
+    # Map each effect to Gell-Mann coordinates
     to_gellmann = lambda v: np.array([(v @ e).trace() for e in basis[::-1]])
-    A=np.array([to_gellmann(v) for v in effects]).T.real
-    alpha=null_space(A).T
+    A = np.array([to_gellmann(v) for v in effects]).T.real
+
+    # Linear relations between effects (null space)
+    alpha = null_space(A).T
     n = len(alpha[0])
+
+    # Constraints: p_k ≥ 0, sum_k p_k = 1, alpha · p = 0
     A_eq = np.vstack([np.ones(n), alpha])
     b_eq = np.concatenate([[1], np.zeros(len(alpha))])
+
     N = null_space(A_eq)
     A_eq_inv = np.linalg.pinv(A_eq)
-    p0 = A_eq_inv @ b_eq
+    p0 = A_eq_inv @ b_eq  # particular solution
+
+    # Vertex enumeration: A p ≤ b
     A_ub = -np.eye(n)
     b_ub = np.zeros(n)
-    A = A_ub @ N
-    b = b_ub - A_ub @ p0
-    vertices_lower_dim = compute_polytope_vertices(A, b)
+    A_poly = A_ub @ N
+    b_poly = b_ub - A_ub @ p0
+
+    vertices_lower_dim = compute_polytope_vertices(A_poly, b_poly)
     vertices = [p0 + N @ v for v in vertices_lower_dim]
     return np.array(vertices)
-def countzero(b_vectors, y, tolerance=1e-6):
-    approx_zero_vectors = []
-    for b in b_vectors:
-        dot_product = np.dot(b, y)
-        if np.abs(dot_product) <= tolerance:
-            approx_zero_vectors.append(b)
-    return np.array(approx_zero_vectors)
-def checklp(vectors):
-    if len(vectors) == 0:
-        return 0, []
-    # Stack vectors into a matrix
-    matrix = np.vstack(vectors)
-    # Calculate the rank of the matrix
-    rank = np.linalg.matrix_rank(matrix)
-    return rank
 
-def computep(A, B):
-    n = len(A)  # Number of A matrices
-    m = len(B)  # Number of B matrices
+
+# ---------------- Tensor vertices + M, b ----------------
+
+def tensorvertices(A, B):
+    """
+    Given vertex sets A (n×d_a) and B (m×d_b), form all Kronecker products
+    and view them as an (n m) × (d_a d_b) matrix.
+    """
+    n, dim_a = A.shape
+    m, dim_b = B.shape
+    C = np.zeros((n * m, dim_a * dim_b))
+
+    idx = 0
+    for i in range(n):
+        for j in range(m):
+            C[idx] = np.kron(A[i], B[j])
+            idx += 1
+    return C
+
+
+def compute_M_trace(A_ops, B_ops):
+    """
+    Build M_{ij} = |Tr( A_i * B_j^T )| with a simple scaling.
+    A_ops, B_ops are the POVM elements (e.g. icosahedron/dodecahedron effects).
+    """
+    n = len(A_ops)
+    m = len(B_ops)
     M = np.zeros((n, m))
 
     for i in range(n):
         for j in range(m):
-            product = np.dot(A[i]*6, B[j].T*10)/2  # Matrix multiplication
-            M[i, j] = np.abs(np.trace(product))  # Compute trace
+            # You can tweak the scaling factors if needed
+            product = (A_ops[i] * len(A_ops)) @ (B_ops[j].T * len(B_ops)) / 8
+            M[i, j] = abs(np.trace(product))
 
     return M
 
 
-def tensorvertices(A, B):
-    # Number of vertices in sets A and B
-    n, dim_a = A.shape
-    m, dim_b = B.shape
-    # Initialize the new set of vertices C
-    C = np.zeros((n * m, dim_a * dim_b))
-    # Compute the tensor product for each pair of vertices from A and B
-    index = 0
-    for i in range(n):
-        for j in range(m):
-            C[index] = np.kron(A[i], B[j])
-            index += 1
-    return C
+# ---------------- Dual LP ----------------
 
 def solve_dual_problem(M, b):
+    """
+    Solve:  min_y   y·b
+            s.t.    0 ≤ (yM)_j ≤ 1  for all j
+    using Gurobi.
+    """
     m, n = M.shape
 
-    # Create a Gurobi model for the dual problem
     model = Model("Dual_Problem")
-
-    # Add variables for y (no bound on y)
     y = model.addVars(m, lb=-GRB.INFINITY, name="y")
 
-    # Set the objective function: Minimize y * b_star
+    # Objective: minimise sum_i b_i y_i
     model.setObjective(sum(b[i] * y[i] for i in range(m)), GRB.MINIMIZE)
 
-    # Add the constraints: 1 >= y * M >= 0
+    # Constraints: 0 ≤ (yM)_j ≤ 1
     for j in range(n):
-        model.addConstr(sum(M[i, j] * y[i] for i in range(m)) >= 0, name=f"lower_constr_{j}")
-        model.addConstr(sum(M[i, j] * y[i] for i in range(m)) <= 0.1, name=f"upper_constr_{j}")
+        expr = sum(M[i, j] * y[i] for i in range(m))
+        model.addConstr(expr >= 0, name=f"lower_{j}")
+        model.addConstr(expr <= 1, name=f"upper_{j}")
 
-    # Solve the model
     model.optimize()
 
-    # Check if the solution is optimal
     if model.status == GRB.OPTIMAL:
-        # Retrieve the solution for the dual variable y
-        y_solution = np.array([y[i].X for i in range(m)])
-        return y_solution
+        return np.array([y[i].X for i in range(m)])
     else:
-        print(f"Solver ended with status: {model.status}")
+        print(f"Gurobi ended with status: {model.status}")
         return None
 
-def expression(y,rhs=0, return_latex=False):
-    # Step 1: Reshape ymat into (6, 8)
-    data_array = np.array(y).reshape(6, 8)
 
-    # Step 2: Define index maps
-    M_idx_map = [(x, a) for x in range(3) for a in range(2)]
-    N_idx_map = [(y, 0) for y in range(4)] + [(y, 1) for y in reversed(range(4))]
+# ---------------- Inequality expression (240 coefficients) ----------------
 
-    # Step 3: Fill the tensor
-    tensor = np.zeros((3, 4, 2, 2))
-    for i, (x, a) in enumerate(M_idx_map):
-        for j, (y, b) in enumerate(N_idx_map):
-            tensor[x, y, a, b] = data_array[i, j]
+def ineq_expr240_custom(data, rhs=0, ret_latex=False):
+    """
+    Map a length-240 vector into T[x,y,a,b] with
+        x ∈ {0..5}, y ∈ {0..9}, a,b ∈ {0,1},
+    then build  sum_{x,y,a,b} T[x,y,a,b] p(a b | x y) >= rhs.
+    """
+    # Row/column index maps (12 rows, 20 columns)
+    M_map = [
+        (0, 0), (0, 1),
+        (1, 1), (1, 0),
+        (0, 2), (0, 3),
+        (1, 3), (1, 2),
+        (0, 4), (0, 5),
+        (1, 5), (1, 4),
+    ]
+    N_map = [
+        (0, 0), (0, 1), (0, 2), (0, 3), (0, 4),
+        (0, 5), (0, 6), (0, 7), (0, 8), (0, 9),
+        (1, 4), (1, 3), (1, 6), (1, 9), (1, 5),
+        (1, 1), (1, 2), (1, 7), (1, 0), (1, 8),
+    ]
 
-    # Step 4: Create symbolic variables p(ab|xy)
+    arr = np.array(data)
+    if arr.size != 240:
+        raise ValueError("Input data must have 240 elements.")
+    M = arr.reshape(12, 20)
+
+    # Fill tensor T[x, y, a, b]
+    T = np.zeros((6, 10, 2, 2))
+    for i in range(12):
+        a,x = M_map[i]
+        for j in range(20):
+            b,y= N_map[j]
+            T[x, y, a, b] = M[i, j]
+
+    # Symbolic probabilities p(a b | x y)
     p = {}
-    for x in range(3):
-        for y in range(4):
+    for x in range(6):
+        for y in range(10):
             for a in range(2):
                 for b in range(2):
-                    p[(a, b, x, y)] = sp.Symbol(f'p({a}{b}|{x}{y})', real=True)
+                    p[(a, b, x, y)] = sp.Symbol(f"p({a}{b}|{x}{y})", real=True)
 
-    # Step 5: Build symbolic expression
+    # Build linear expression
     expr = 0
-    for x in range(3):
-        for y in range(4):
+    for x in range(6):
+        for y in range(10):
             for a in range(2):
                 for b in range(2):
-                    expr += round(tensor[x, y, a, b] / 1.2) * p[(a, b, x, y)]
+                    expr += T[x, y, a, b] * p[(a, b, x, y)]
 
-    rhs=0
-    inequality = sp.Ge(expr, rhs)  # expr >= rhs
+    ineq = sp.Ge(expr, rhs)
+    return sp.latex(ineq) if ret_latex else str(ineq)
 
-    # Step 7: Return string or LaTeX form
-    return sp.latex(inequality) if return_latex else str(inequality)
-def save_conv_format(M: np.ndarray, filename: str = "vertice68.poi"):
-    if M.shape != (48, 48):
-        raise ValueError("Input array must be 48 by 48.")
 
-    # Round each entry to the nearest integer
-    M_rounded = np.rint(M).astype(int)
+# ---------------- Main script ----------------
 
-    with open(filename, 'w') as f:
-        f.write("DIM=48\n\n")
-        f.write("CONV_SECTION\n")
+def compute_ineq_from_povms(aa, bb, round_decimals=6):
+    """
+    Given POVMs aa (Alice) and bb (Bob), compute the normalised dual LP solution y_norm
+    and print the corresponding symbolic Bell-type inequality.
 
-        for idx, row in enumerate(M_rounded, start=1):
-            row_str = ' '.join(str(x) for x in row)
-            f.write(f"({idx:3})  {row_str}\n")
+    Returns:
+        y_norm  -- the normalised and rounded inequality coefficients
+    """
 
-        f.write("END\n")
-# save_conv_format(M.T, "vertice68.poi")
+    # Convert POVM effects into classical-polytope vertices
+    B = Dvertices(bb).T
+    A = Dvertices(aa).T
 
-bb=Bases.cube_povm()
-B=Dvertices(bb).T
+    # Tensor-product vertices
+    M = tensorvertices(A, B)
 
-aa=Bases.octahedron_povm()
-A= Dvertices(aa).T
-# Compute M
-M=tensorvertices(A, B)
-b = computep(aa,bb).flatten()
+    # RHS vector from traces
+    b = compute_M_trace(aa, bb).flatten()
 
-y_solution = solve_dual_problem(M, b)
-#ymat=y_solution.reshape(len(aa),len(bb))
-expr=expression(y_solution)
-# Display the symbolic expression
-sp.pprint(expr, use_unicode=True)
+    # Solve the dual LP
+    y_solution = solve_dual_problem(M, b)
+    if y_solution is None:
+        print("Dual LP failed.")
+        return None
 
-# zvectors = countzero(M.T, y_solution)
-#
-# rank= checklp(zvectors)
-#
-# print(rank)
+    # Normalise coefficients so first entry is 1, remove small numerical noise
+    y_norm = np.round(y_solution / y_solution[0], round_decimals)
 
-with open("inequivalent.pkl", "rb") as f:
-    loaded_reps = pickle.load(f)
+    # Build and print the symbolic inequality
+    ineq = ineq_expr240_custom(y_norm)
+    sp.pprint(ineq, use_unicode=True)
+
+    return y_norm
+
+
+N = Bases.icosahedron_povm()
+M = Bases.dodecahedron_povm()
+
+# run computation
+y_norm = compute_ineq_from_povms(N, M)
+
+# now YOU decide how to save it
+np.save("y_ineq1220.npy", y_norm)
