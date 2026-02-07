@@ -227,7 +227,7 @@ if __name__ == "__main__":
                     M_povm = Bases.random_POVM(n_bases, d)
 
                     # 2. Optimize (Using NEW Exact Solver)
-                    S_opt, eta = compute_eta_exact(N_povm, M_povm)
+                    S_opt, eta = compute_eta_dual(N_povm, M_povm)
 
                     if S_opt is not None:
                         print(f"    Trial {t + 1}: Eta = {eta:.6f}")
