@@ -19,9 +19,8 @@ quantum systems. It contains
 | file | purpose |
 |------|---------|
 | `Inequalities.txt` | Full list of Example‑2 inequalities output by **PORTA** |
-| `Ineqcleanup68.py` | Cleans & classifies the above into **4 inequivalent classes** |
-| `Farka68.py`       | Re‑derives Example‑2 inequalities using **Farkas' lemma** |
-| `Farka1220.py`     | Same derivation for **Example 3** |
+| `TableII.py` | Cleans & classifies inequalities in  `Inequalities.txt` into **4 inequivalent classes** |
+| `Inequality17.py`     | Noncontextual inequalities Eq(17) for **Example 3** |
 
 The ready‑to‑use inequality vector for our experiment is saved at the top level
 as **`y_ineq.npy`**.
