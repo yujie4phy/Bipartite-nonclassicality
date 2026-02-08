@@ -11,8 +11,8 @@ quantum systems. It contains
 ### Data (`Counts_new/`)
 
 * Each `.npy` file stores a **12 × 20** integer array  
-  (`detector × measurement‑setting`) representing raw Poissonian counts.
-* File names encode the **estimated isotropic‑state parameter \(p\)**.
+  (`detector × measurement‑setting`) representing raw counts.
+* File names encode the ** isotropic‑state parameter \(p\)**.
 
 ### Inequality files (`Inequality/`)
 
@@ -32,7 +32,8 @@ quantum systems. It contains
 
 | script | role |
 |--------|------|
-| `Optimized‑tomography‑all‑monte.py` | Performs maximum‑likelihood tomography and estimates the best‑fit \(p\) for each dataset. |
-| `Violation_monte_new.py`            | Propagates Poisson noise via Monte‑Carlo and checks violations of `y_ineq.npy`. |
+| `Optimized‑tomography‑all‑monte.py` | Performs quantum state tomography and estimates the best‑fit \(p\) for each dataset. |
+| `Violation_monte_new.py`            | Propagates Poisson noise via Monte‑Carlo and checks violations of `y_ineq.npy`. (Fig 5 and Table IX) |
+| `Violation_monte_w.o.ineq.py`       | Propagates Poisson noise via Monte‑Carlo and checks violations without inequality. (Table VI)|
 | `CheckUnsteering.py`                | Searches for an unsteerable decomposition (SDP‑based). |
 
