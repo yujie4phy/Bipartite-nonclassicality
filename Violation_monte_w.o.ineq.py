@@ -6,7 +6,6 @@ import Bases
 from Tofrequency import process_data
 from secondaryP import SecP
 
-from FitQ_SS1_n import Fitop
 from FitGPT_SS2 import FitGPT
 from FitQ_SS1 import FitQ
 
