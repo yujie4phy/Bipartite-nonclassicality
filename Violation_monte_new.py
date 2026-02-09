@@ -85,7 +85,7 @@ for r_val, fname in zip(r_values, file_names):
     y_ineq = y_ineq / y_ineq[0]
     # Number of Monte Carlo trials
     if __name__ == '__main__':
-        num_trials = 10
+        num_trials = 2
         # Run the Monte Carlo simulation.
         results = monte_carlo_simulation(data, rho, N, M, pair1, pair2, y_ineq, num_trials=num_trials)
         avg_violation = np.mean(results)
