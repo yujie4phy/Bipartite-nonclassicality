@@ -44,7 +44,9 @@ def solveU(P, C):
         colcons = [1 if k // rowu == j else 0 for k in range(rowu ** 2)]
         A_eq.append(colcons)
         b_eq.append(1)
-    # 2. Zero constraint on double sum: sum_i sum_j P_ki * u_ij * C_jt = 0 for all k and t
+
+
+    # 2. operational constraints on new probability: sum_i sum_j P_ki * u_ij * C_jt = 0 for all k and t
     for k in range(colb):
         for t in range(ncons):
             constraint_row = [0] * (rowu ** 2)
@@ -54,6 +56,18 @@ def solveU(P, C):
                     constraint_row[index] = P[k, i] * C[j, t]
             A_eq.append(constraint_row)
             b_eq.append(0)
+
+    # 3. Marginal-preservation constraints:
+    # For each k: sum_i sum_j P[k,i] * u_ij = sum_i P[k,i]
+    for k in range(colb):
+        constraint_row = [0] * (rowu ** 2)
+        for i in range(rowu):
+            for j in range(rowu):
+                index = i * rowu + j
+                constraint_row[index] = P[k, i]  # coefficient multiplying u_ij
+        A_eq.append(constraint_row)
+        b_eq.append(float(np.sum(P[k, :])))
+
     A_eq = np.array(A_eq, dtype=float)
     b_eq = np.array(b_eq, dtype=float)
     # Bounds: 0 <= u_ij <= 1 (since we want a stochastic matrix)
